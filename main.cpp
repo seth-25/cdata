@@ -173,7 +173,7 @@ void generate_random_timeseries(int length, int number_of_timeseries,
                 if (hastimestamp) {
 //                    long timestamp = 0;
                     time_t timestamp = time(nullptr);
-//                    std::cout << "time = " << timestamp << std::endl;
+//                    std::cout << "time = " << timestamp << " " << std::endl;
                     srand(i);
 //                    std::cout << "stime = " << rand() % timestamp << " " << i << std::endl;
                     long stimestamp = rand() % timestamp;
