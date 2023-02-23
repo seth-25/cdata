@@ -27,7 +27,26 @@
 
 #define PRODUCT "TSutils - Time Series Generator\n\
 Copyright (C) 2012 University of Trento\n\n"
-#define STD 1   // Standard deviation 
+#define STD 1   // Standard deviation
+
+
+
+// Initialize variables
+
+int length = Ts_length;                 // Length of a single time series
+int number_of_timeseries =  1e6;   // Number of time series to generate
+
+// 倾斜度
+float skew_frequency = 0;           // The skew frequency
+int repetition = 1;             // How many times each time series is repeated
+char normalize = 1;             // Normalize or not.
+char * filename = "./ts.bin";
+char * filename1 = "./saxt.bin";
+bool ists = 1;
+bool issaxt = 1;
+bool issort = 0;
+bool hastimestamp = 0;
+int seed = 123;
 
 void z_normalize(float *ts, int size);
 
@@ -141,7 +160,8 @@ void generate_random_timeseries(int length, int number_of_timeseries,
 
     gsl_rng_env_setup();
     T = gsl_rng_default;
-    gsl_rng_default_seed = ((unsigned long)(time(NULL)));
+//    gsl_rng_default_seed = ((unsigned long)(time(NULL)));
+    gsl_rng_default_seed = (seed);
     r = gsl_rng_alloc (T);
     FILE * data_file;
     if (ists)
@@ -174,7 +194,7 @@ void generate_random_timeseries(int length, int number_of_timeseries,
 //                    long timestamp = 0;
                     time_t timestamp = time(nullptr);
 //                    std::cout << "time = " << timestamp << " " << std::endl;
-                    srand(i);
+                    srand(seed + i);
 //                    std::cout << "stime = " << rand() % timestamp << " " << i << std::endl;
                     long stimestamp = rand() % timestamp;
                     fwrite(&stimestamp, sizeof(long), 1, data_file);
@@ -219,22 +239,6 @@ void generate_random_timeseries(int length, int number_of_timeseries,
 //追加写入
 
 int main(int argc, char **argv) {
-
-    // Initialize variables
-    int length = Ts_length;                 // Length of a single time series
-    int number_of_timeseries = 3e6;   // Number of time series to generate
-
-    // 倾斜度
-    float skew_frequency = 0;           // The skew frequency
-    int repetition = 1;             // How many times each time series is repeated
-    char normalize = 1;             // Normalize or not.
-    char * filename = "./output.bin";
-    char * filename1 = "./saxt.bin";
-    bool ists = 1;
-    bool issaxt = 1;
-    bool issort = 0;
-    bool hastimestamp = 1;
-
 //    // Parse command line arguments
 //    parse_args(argc, argv, &length, &number_of_timeseries, &skew_frequency, &normalize,&filename);
 //
