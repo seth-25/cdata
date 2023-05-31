@@ -21,6 +21,8 @@
 #include "../include/ts.h"
 #include "../include/sax_breakpoints.h"
 #include "algorithm"
+#include "immintrin.h"
+#include "sax_bsearch.h"
 /** 
  This is used for converting to sax
  */
@@ -43,70 +45,73 @@ int compare(const void *a, const void *b)
 /** 
  Calculate paa.
  */
-enum response paa_from_ts (ts_type *ts_in, ts_type *paa_out) {
-    int s, i;
-    for (s=0; s<Segments; s++) {
-        paa_out[s] = 0;
-        for (i=0; i<Ts_values_per_segment; i++) {
-            paa_out[s] += ts_in[(s * Ts_values_per_segment)+i];
-        }
-        paa_out[s] /= Ts_values_per_segment;
+void paa_from_ts (ts_type *ts_in, ts_type *paa_out) {
+
+    __m256 xfsSum;
+    __m256 a;
+    for (int i=0; i<Segments; i++) {
+      xfsSum = _mm256_setzero_ps();
+      int off = i * Ts_values_per_segment;
+      for (int j=0;j<Ts_values_per_segment;j+=8) {
+        a = _mm256_loadu_ps(ts_in + off + j);
+        xfsSum = _mm256_add_ps(xfsSum, a);
+      }
+      const auto* q = (const float*)&xfsSum;
+      paa_out[i] = (q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7]) / Ts_values_per_segment;
     }
-    return SUCCESS;
+    
 }
 
 
-enum response sax_from_paa (ts_type *paa, sax_type *sax) {
+void sax_from_paa (ts_type *paa, sax_type *sax) {
 
     //printf("FROM %lf TO %lf\n", sax_breakpoints[offset], sax_breakpoints[offset + cardinality - 2]);
-    
-    int si;
-    for (si=0; si<Segments; si++) {
-        sax[si] = 0;
-        
-        // First object = sax_breakpoints[offset]
-        // Last object = sax_breakpoints[offset + cardinality - 2]
-        // Size of sub-array = cardinality - 1
-        
-        float *res = (float *) bsearch(&paa[si], &sax_breakpoints[sax_offset], Cardinality - 1,
-                                       sizeof(ts_type), compare);
-        if(res != NULL)
-	  {
-            //sax[si] = (int) (res -  &sax_breakpoints[offset]);
-	    sax[si] = (sax_type) (res -  &sax_breakpoints[sax_offset]);
-	  }
-        else if (paa[si] > 0)
-	  {
-            sax[si] = Cardinality-1;
-	  }
-    }
 
-    return SUCCESS;
+  __m256 vmask;
+  __m256 vt;
+  __m128 vmask1;
+
+  for(int i=0;i<Segments;i++){
+
+    vt = _mm256_set1_ps(paa[i]);
+    vmask = _mm256_cmp_ps(vt, BM.a1, _CMP_GT_OQ);
+    int bit_mask = _mm256_movemask_ps(vmask);
+
+    int d = sax_c1[bit_mask];
+    vmask = _mm256_cmp_ps(vt, BM.a2[d], _CMP_GT_OQ);
+    bit_mask = _mm256_movemask_ps(vmask);
+
+    int d1 = sax_c1[bit_mask];
+    vmask1 = _mm_cmp_ps(*(__m128*)&vt, BM.a3[d][d1], _CMP_GT_OQ);
+    bit_mask = _mm_movemask_ps(vmask1);
+
+    sax[i] = (d << 5) + (d1 << 2) + sax_c1[bit_mask];
+  }
+
+  
 }
 
 /**
  This function converts a ts record into its sax representation.
  */
-enum response sax_from_ts(ts_type *ts_in, sax_type *sax_out)
+void sax_from_ts(ts_type *ts_in, sax_type *sax_out)
 {
     // Create PAA representation
-    float * paa = static_cast<float *>(malloc(sizeof(float) * Segments));
-    if(paa == NULL) {
-        fprintf(stderr,"error: could not allocate memory for PAA representation.\n");
-        return FAILURE;
+    float paa[Segments];
+
+
+  __m256 xfsSum;
+  __m256 a;
+  for (int i=0; i<Segments; i++) {
+    xfsSum = _mm256_setzero_ps();
+    int off = i * Ts_values_per_segment;
+    for (int j=0;j<Ts_values_per_segment;j+=8) {
+      a = _mm256_loadu_ps(ts_in + off + j);
+      xfsSum = _mm256_add_ps(xfsSum, a);
     }
-    
-    int s, i;
-    for (s=0; s<Segments; s++) {
-        paa[s] = 0;
-        for (i=0; i<Ts_values_per_segment; i++) {
-            paa[s] += ts_in[(s * Ts_values_per_segment)+i];
-        }
-        paa[s] /= Ts_values_per_segment;
-//#ifdef DEBUG
-        //printf("%d: %lf\n", s, paa[s]);
-//#endif
-    }
+    const auto* q = (const float*)&xfsSum;
+    paa[i] = (q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7]) / Ts_values_per_segment;
+  }
     
     // Convert PAA to SAX
     // Note: Each cardinality has cardinality - 1 break points if c is cardinality
@@ -115,50 +120,49 @@ enum response sax_from_ts(ts_type *ts_in, sax_type *sax_out)
     //       TO   (c - 1) * (c - 2) / 2 + c - 1
 
     //printf("FROM %lf TO %lf\n", sax_breakpoints[offset], sax_breakpoints[offset + cardinality - 2]);
-    
-    int si;
-    for (si=0; si<Segments; si++) {
-        sax_out[si] = 0;
-        
-        // First object = sax_breakpoints[offset]
-        // Last object = sax_breakpoints[offset + cardinality - 2]
-        // Size of sub-array = cardinality - 1
-        
-        float *res = (float *) bsearch(&paa[si], &sax_breakpoints[sax_offset], Cardinality - 1,
-                                       sizeof(ts_type), compare);
-        if(res != NULL)
-	  {
-            //sax_out[si] = (int) (res -  &sax_breakpoints[offset]);
-	    sax_out[si] = (sax_type) (res -  &sax_breakpoints[sax_offset]);
-	  }
-        else if (paa[si] > 0)
-	  sax_out[si] = (sax_type) (Cardinality-1);
+
+    __m256 vmask;
+    __m256 vt;
+    __m128 vmask1;
+
+    for(int i=0;i<Segments;i++){
+
+      vt = _mm256_set1_ps(paa[i]);
+      vmask = _mm256_cmp_ps(vt, BM.a1, _CMP_GT_OQ);
+      int bit_mask = _mm256_movemask_ps(vmask);
+
+      int d = sax_c1[bit_mask];
+      vmask = _mm256_cmp_ps(vt, BM.a2[d], _CMP_GT_OQ);
+      bit_mask = _mm256_movemask_ps(vmask);
+
+      int d1 = sax_c1[bit_mask];
+      vmask1 = _mm_cmp_ps(*(__m128*)&vt, BM.a3[d][d1], _CMP_GT_OQ);
+      bit_mask = _mm_movemask_ps(vmask1);
+
+      sax_out[i] = (d << 5) + (d1 << 2) + sax_c1[bit_mask];
     }
     
     //sax_print(sax_out, segments, cardinality);
-    free(paa);
-    return SUCCESS;
+
+    
 }
 
-enum response saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out) {
+void saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out) {
     // Create PAA representation
-    float * paa = static_cast<float *>(malloc(sizeof(float) * Segments));
-    sax_type *sax_out = static_cast<sax_type *>(malloc(sizeof(sax_type) * Segments));
-    if(paa == NULL) {
-        fprintf(stderr,"error: could not allocate memory for PAA representation.\n");
-        return FAILURE;
-    }
+    float paa[Segments];
+    sax_type sax_out[Segments];
 
-    int s, i;
-    for (s=0; s<Segments; s++) {
-        paa[s] = 0;
-        for (i=0; i<Ts_values_per_segment; i++) {
-            paa[s] += ts_in[(s * Ts_values_per_segment)+i];
-        }
-        paa[s] /= Ts_values_per_segment;
-//#ifdef DEBUG
-//        printf("%d: %lf\n", s, paa[s]);
-//#endif
+    __m256 xfsSum;
+    __m256 a;
+    for (int i=0; i<Segments; i++) {
+      xfsSum = _mm256_setzero_ps();
+      int off = i * Ts_values_per_segment;
+      for (int j=0;j<Ts_values_per_segment;j+=8) {
+        a = _mm256_loadu_ps(ts_in + off + j);
+        xfsSum = _mm256_add_ps(xfsSum, a);
+      }
+      const auto* q = (const float*)&xfsSum;
+      paa[i] = (q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7]) / Ts_values_per_segment;
     }
 
     // Convert PAA to SAX
@@ -168,54 +172,71 @@ enum response saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out) {
     //       TO   (c - 1) * (c - 2) / 2 + c - 1
     //printf("FROM %lf TO %lf\n", sax_breakpoints[offset], sax_breakpoints[offset + cardinality - 2]);
 
-    int si;
-    for (si=0; si<Segments; si++) {
-        sax_out[si] = 0;
+    __m256 vmask;
+    __m256 vt;
+    __m128 vmask1;
 
-        // First object = sax_breakpoints[offset]
-        // Last object = sax_breakpoints[offset + cardinality - 2]
-        // Size of sub-array = cardinality - 1
+    for(int i=0;i<Segments;i++){
 
-        float *res = (float *) bsearch(&paa[si], &sax_breakpoints[sax_offset], Cardinality - 1,
-                                       sizeof(ts_type), compare);
-        if(res != NULL)
-        {
-            //sax_out[si] = (int) (res -  &sax_breakpoints[offset]);
-            sax_out[si] = (sax_type) (res -  &sax_breakpoints[sax_offset]);
-        }
-        else if (paa[si] > 0)
-            sax_out[si] = (sax_type) (Cardinality-1);
+      vt = _mm256_set1_ps(paa[i]);
+      vmask = _mm256_cmp_ps(vt, BM.a1, _CMP_GT_OQ);
+      int bit_mask = _mm256_movemask_ps(vmask);
+
+      int d = sax_c1[bit_mask];
+      vmask = _mm256_cmp_ps(vt, BM.a2[d], _CMP_GT_OQ);
+      bit_mask = _mm256_movemask_ps(vmask);
+
+      int d1 = sax_c1[bit_mask];
+      vmask1 = _mm_cmp_ps(*(__m128*)&vt, BM.a3[d][d1], _CMP_GT_OQ);
+      bit_mask = _mm_movemask_ps(vmask1);
+
+      sax_out[i] = (d << 5) + (d1 << 2) + sax_c1[bit_mask];
     }
 
+//    uint64_t t = (*(uint64_t*)sax_out);
+//    (*(uint64_t*)saxt_out) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+//                              (((((t) & 0x4040404040404040) * 0x2040810204081) & 0x7f80000000000000) >> 7) |
+//                              (((((t) & 0x2020202020202020) * 0x2040810204081) & 0x3fc0000000000000) >> 14) |
+//                              (((((t) & 0x1010101010101010) * 0x2040810204081) & 0x1fe0000000000000) >> 21) |
+//                              (((((t) & 0x0808080808080808) * 0x2040810204081) & 0x0ff0000000000000) >> 28) |
+//                              (((((t) & 0x0404040404040404) * 0x2040810204081) & 0x07f8000000000000) >> 35) |
+//                              (((((t) & 0x0202020202020202) * 0x2040810204081) & 0x03fc000000000000) >> 42) |
+//                              (((((t) & 0x0101010101010101) * 0x2040810204081) & 0x01fe000000000000) >> 49);
 
-    free(paa);
-    for(int i=Bit_cardinality-1; i>=0; i--) {
-        for(int j=0; j<Segments; j++) {
-          saxt_out[i] |= ((sax_out[j]>>(i)) & 1) << (Segments-j-1);
-        }
-    }
-    free(sax_out);
-    return SUCCESS;
+#if daxiao
+  uint64_t t = (*(uint64_t*)sax_out);
+  (*(uint64_t*)saxt_out) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+                           (((((t<<1) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 8) |
+                           (((((t<<2) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 16) |
+                           (((((t<<3) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 24) |
+                           (((((t<<4) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 32) |
+                           (((((t<<5) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 40) |
+                           (((((t<<6) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 48) |
+                           (((((t<<7) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 56);
+#else
+  for(int i=0;i<Bit_cardinality;i++) {
+    saxt_out[i] = _mm_movemask_epi8(_mm_slli_epi64(_mm_loadu_si128(reinterpret_cast<const __m128i_u *>(sax_out)), Bit_cardinality - i - 1));
+  }
+#endif
+
+    
 }
 
-enum response paa_saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out, ts_type *paa) {
+void paa_saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out, ts_type *paa) {
   // Create PAA representation
-  sax_type *sax_out = static_cast<sax_type *>(malloc(sizeof(sax_type) * Segments));
-  if(paa == NULL) {
-    fprintf(stderr,"error: could not allocate memory for PAA representation.\n");
-    return FAILURE;
-  }
+  sax_type sax_out[Segments];
 
-  int s, i;
-  for (s=0; s<Segments; s++) {
-    paa[s] = 0;
-    for (i=0; i<Ts_values_per_segment; i++) {
-      paa[s] += ts_in[(s * Ts_values_per_segment)+i];
+  __m256 xfsSum;
+  __m256 a;
+  for (int i=0; i<Segments; i++) {
+    xfsSum = _mm256_setzero_ps();
+    int off = i * Ts_values_per_segment;
+    for (int j=0;j<Ts_values_per_segment;j+=8) {
+      a = _mm256_loadu_ps(ts_in + off + j);
+      xfsSum = _mm256_add_ps(xfsSum, a);
     }
-    paa[s] /= Ts_values_per_segment;
-//#ifdef DEBUG
-//        printf("%d: %lf\n", s, paa[s]);
-//#endif
+    const auto* q = (const float*)&xfsSum;
+    paa[i] = (q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7]) / Ts_values_per_segment;
   }
 
   // Convert PAA to SAX
@@ -225,56 +246,95 @@ enum response paa_saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out, ts_type *paa
   //       TO   (c - 1) * (c - 2) / 2 + c - 1
   //printf("FROM %lf TO %lf\n", sax_breakpoints[offset], sax_breakpoints[offset + cardinality - 2]);
 
-  int si;
-  for (si=0; si<Segments; si++) {
-    sax_out[si] = 0;
+  __m256 vmask;
+  __m256 vt;
+  __m128 vmask1;
 
-    // First object = sax_breakpoints[offset]
-    // Last object = sax_breakpoints[offset + cardinality - 2]
-    // Size of sub-array = cardinality - 1
+  for(int i=0;i<Segments;i++){
 
-    float *res = (float *) bsearch(&paa[si], &sax_breakpoints[sax_offset], Cardinality - 1,
-                                   sizeof(ts_type), compare);
-    if(res != NULL)
-    {
-      //sax_out[si] = (int) (res -  &sax_breakpoints[offset]);
-      sax_out[si] = (sax_type) (res -  &sax_breakpoints[sax_offset]);
-    }
-    else if (paa[si] > 0)
-      sax_out[si] = (sax_type) (Cardinality-1);
+    vt = _mm256_set1_ps(paa[i]);
+    vmask = _mm256_cmp_ps(vt, BM.a1, _CMP_GT_OQ);
+    int bit_mask = _mm256_movemask_ps(vmask);
+
+    int d = sax_c1[bit_mask];
+    vmask = _mm256_cmp_ps(vt, BM.a2[d], _CMP_GT_OQ);
+    bit_mask = _mm256_movemask_ps(vmask);
+
+    int d1 = sax_c1[bit_mask];
+    vmask1 = _mm_cmp_ps(*(__m128*)&vt, BM.a3[d][d1], _CMP_GT_OQ);
+    bit_mask = _mm_movemask_ps(vmask1);
+
+    sax_out[i] = (d << 5) + (d1 << 2) + sax_c1[bit_mask];
   }
 
-
-  for(int i=Bit_cardinality-1; i>=0; i--) {
-    for(int j=0; j<Segments; j++) {
-      saxt_out[i] |= ((sax_out[j]>>(i)) & 1) << (Segments-j-1);
-    }
+#if daxiao
+  uint64_t t = (*(uint64_t*)sax_out);
+  (*(uint64_t*)saxt_out) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+                           (((((t<<1) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 8) |
+                           (((((t<<2) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 16) |
+                           (((((t<<3) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 24) |
+                           (((((t<<4) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 32) |
+                           (((((t<<5) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 40) |
+                           (((((t<<6) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 48) |
+                           (((((t<<7) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 56);
+#else
+  for(int i=0;i<Bit_cardinality;i++) {
+    saxt_out[i] = _mm_movemask_epi8(_mm_slli_epi64(_mm_loadu_si128(reinterpret_cast<const __m128i_u *>(sax_out)), Bit_cardinality - i - 1));
   }
-  free(sax_out);
-  return SUCCESS;
+#endif
+
+  
 }
 
-enum response saxt_from_sax(sax_type *sax_in, saxt_type *saxt_out) {
-
-    for(int i=Bit_cardinality-1; i>=0; i--) {
-      for(int j=0; j<Segments; j++) {
-        saxt_out[i] |= ((sax_in[j]>>(i)) & 1) << (Segments-j-1);
-      }
-    }
-    return SUCCESS;
+void saxt_from_sax(sax_type *sax_in, saxt_type *saxt_out) {
+#if daxiao
+  uint64_t t = (*(uint64_t*)sax_in);
+  (*(uint64_t*)saxt_out) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+                           (((((t<<1) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 8) |
+                           (((((t<<2) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 16) |
+                           (((((t<<3) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 24) |
+                           (((((t<<4) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 32) |
+                           (((((t<<5) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 40) |
+                           (((((t<<6) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 48) |
+                           (((((t<<7) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 56);
+#else
+  for(int i=0;i<Bit_cardinality;i++) {
+    saxt_out[i] = _mm_movemask_epi8(_mm_slli_epi64(_mm_loadu_si128(reinterpret_cast<const __m128i_u *>(sax_in)), Bit_cardinality - i - 1));
+  }
+#endif
+    
 }
 
-enum response sax_from_saxt(sax_type *saxt_in, saxt_type *sax_out) {
-    for(int i=0; i<Segments; i++) {
-        for(int j=Bit_cardinality-1; j>=0; j--) {
-            sax_out[i] |= (saxt_in[j]>>(Segments-i-1) & 1) << (j);
-        }
-    }
-    return SUCCESS;
+void sax_from_saxt(saxt_type *saxt_in, sax_type *sax_out) {
+//  uint64_t t = 0;
+//  memcpy(&t, saxt_in, sizeof(uint64_t));
+#if daxiao
+  uint64_t t = (*(uint64_t*)saxt_in);
+  (*(uint64_t*)sax_out) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+                          (((((t<<1) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 8) |
+                          (((((t<<2) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 16) |
+                          (((((t<<3) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 24) |
+                          (((((t<<4) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 32) |
+                          (((((t<<5) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 40) |
+                          (((((t<<6) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 48) |
+                          (((((t<<7) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 56);
+#else
+  uint64_t t[2];
+  memset(t, 0, sizeof t);
+  memcpy(t, saxt_in, sizeof(saxt_only));
+  for(int i=0;i<Segments;i++) {
+    int daoi = Segments - i - 1;
+    sax_out[i] = ((((t[0] << daoi) & 0x8000800080008000) * 0x200040008001) >> 60) |
+             ((((t[1] << daoi) & 0x8000800080008000) * 0x200040008001) >> 56) ;
+  }
+#endif
+
+    
 }
 
 
 void printbin(long long unsigned int n, int size) {
+#if isprint
     char *b = static_cast<char *>(malloc(sizeof(char) * (size + 1)));
     int i;
     
@@ -288,6 +348,7 @@ void printbin(long long unsigned int n, int size) {
     b[size] = '\0';
     printf("%s\n", b);
     free(b);
+#endif
 }
 
 void serial_printbin (unsigned long long n, int size) {
@@ -319,7 +380,18 @@ void sax_print(sax_type *sax, int segments, int bit_cardinality)
     printf("\n");
 }
 
+void sax_print(sax_type *sax) {
+  int i;
+  for (i=0; i < Segments; i++) {
+//        printf("%d:\t", i);
+    std::cout<<(int)sax[i]<<" ";
+//        printbin(saxt[i], Segments);
+  }
+  printf("\n");
+}
+
 void saxt_print(saxt_type *saxt) {
+#if isprint
     int i;
     for (i=0; i < Bit_cardinality; i++) {
 //        printf("%d:\t", i);
@@ -327,9 +399,11 @@ void saxt_print(saxt_type *saxt) {
 //        printbin(saxt[i], Segments);
     }
     printf("\n");
+#endif
 }
 
 void saxt_print(saxt_only saxt) {
+#if isprint
   int i;
   for (i=0; i < Bit_cardinality; i++) {
 //        printf("%d:\t", i);
@@ -337,9 +411,21 @@ void saxt_print(saxt_only saxt) {
 //        printbin(saxt[i], Segments);
   }
   printf("\n");
+#endif
+}
+
+void leafkey_print(void* saxt) {
+  int i;
+  for (i=0; i < Bit_cardinality*2; i++) {
+//        printf("%d:\t", i);
+    std::cout<<(int)((unsigned char*)saxt)[i]<<" ";
+//        printbin(saxt[i], Segments);
+  }
+  printf("\n");
 }
 
 void saxt_print(saxt_type *saxt, saxt_type *prefix, cod co_d) {
+#if isprint
     int i;
     for (i=0; i < co_d; i++) {
 //        printf("%d:\t", i);
@@ -352,21 +438,48 @@ void saxt_print(saxt_type *saxt, saxt_type *prefix, cod co_d) {
       std::cout<<(int)saxt[i-co_d]<<" ";
     }
     printf("\n");
+#endif
 }
 
-float minidist_paa_to_saxt(ts_type *paa, saxt saxt_, cod co_d) {
+float minidist_paa_to_saxt(const float* paa, saxt saxt_, cod co_d) {
     ts_type distance = 0;
     // TODO: Store offset in index settings. and pass index settings as parameter.
 
     int offset = sax_offset_i[co_d];
     sax_type sax[Segments];
-    memset(sax, 0, sizeof sax);
     // For each sax record find the break point
 
+#if daxiao
+  uint64_t t = 0;
+    memcpy(&t, saxt_, sizeof(saxt_type) * co_d);
+    (*(uint64_t*)sax) = ((t & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000 |
+                        (((((t<<1) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 8) |
+                        (((((t<<2) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 16) |
+                        (((((t<<3) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 24) |
+                        (((((t<<4) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 32) |
+                        (((((t<<5) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 40) |
+                        (((((t<<6) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 48) |
+                        (((((t<<7) & 0x8080808080808080) * 0x2040810204081) & 0xff00000000000000) >> 56);
+#else
+  uint64_t t[2];
+  memset(t, 0, sizeof t);
+  memcpy(t, saxt_, sizeof(saxt_type) * co_d);
+  for(int i=0;i<Segments;i++) {
+    int daoi = Segments - i - 1;
+    sax[i] = ((((t[0] << daoi) & 0x8000800080008000) * 0x200040008001) >> 60) |
+             ((((t[1] << daoi) & 0x8000800080008000) * 0x200040008001) >> 56) ;
+  }
+#endif
+
+    ts_type breakpoint_lower[Segments];
+    memset(breakpoint_lower, 0, sizeof breakpoint_lower);
+    ts_type breakpoint_upper[Segments];
+    memset(breakpoint_upper, 0, sizeof breakpoint_upper);
+
     for (int i=0; i<Segments; i++) {
-        for(int j=co_d-1; j>=0; j--) {
-          sax[i] |= (saxt_[j]>>(Segments-i-1) & 1) << (j);
-        }
+//        for(int j=co_d-1; j>=0; j--) {
+//          sax[i] |= (saxt_[j]>>(i) & 1) << (j);
+//        }
         sax_type region = sax[i];
 
         /*
@@ -374,40 +487,79 @@ float minidist_paa_to_saxt(ts_type *paa, saxt saxt_, cod co_d) {
             int region_upper = (~((int)MAXFLOAT << (c_m - c_c)) | region_lower);
         */
 
-        ts_type breakpoint_lower; // <-- TODO: calculate breakpoints.
-        ts_type breakpoint_upper; // <-- - || -
+        breakpoint_lower[i] = region == 0 ? -MAXFLOAT : sax_breakpoints[offset + region - 1];
+        breakpoint_upper[i] = region == cardinality_1_i[co_d] ? MAXFLOAT : sax_breakpoints[offset + region];
 
-        if (region == 0) {
-            breakpoint_lower = MINFLOAT;
-        }
-        else
-        {
-            breakpoint_lower = sax_breakpoints[offset + region - 1];
-        }
-        if (region == cardinality_1_i[co_d]) {
-            breakpoint_upper = MAXFLOAT;
-        }
-        else
-        {
-            breakpoint_upper = sax_breakpoints[offset + region];
-        }
         //printf("FROM: \n");
         //sax_print(&region_lower, 1, c_m);
         //printf("TO: \n");
         //sax_print(&region_upper, 1, c_m);
         //printf("\n%d.%d is from %d to %d, %lf - %lf\n", v, c_c, region_lower, region_upper,
         //       breakpoint_lower, breakpoint_upper);
+//        if (breakpoint_lower[i] > paa[i]) {
+//          distance += pow(breakpoint_lower[i] - paa[i], 2);
+//        }
+//        else if(breakpoint_upper[i] < paa[i]) {
+//          distance += pow(breakpoint_upper[i] - paa[i], 2);
+//        }
 
-        if (breakpoint_lower > paa[i]) {
-            distance += pow(breakpoint_lower - paa[i], 2);
-        }
-        else if(breakpoint_upper < paa[i]) {
-            distance += pow(breakpoint_upper - paa[i], 2);
-        }
 //        else {
 //            printf("%lf is between: %lf and %lf\n", paa[i], breakpoint_lower, breakpoint_upper);
 //        }
     }
+//
+//    float distance1 = 0;
+#if daxiao
+  __m256 dis8 = _mm256_setzero_ps();
+  __m256 paa8 = _mm256_loadu_ps(paa);
+
+  __m256 lower8 = _mm256_loadu_ps(breakpoint_lower);
+  __m256 tosub = _mm256_sub_ps(lower8, paa8);
+  __m256 f = _mm256_mul_ps(tosub, tosub);
+  __m256 mask = _mm256_cmp_ps(lower8, paa8, _CMP_GT_OQ);
+  dis8 = _mm256_add_ps(dis8, _mm256_and_ps(f, mask));
+
+  __m256 upper8 = _mm256_loadu_ps(breakpoint_upper);
+  tosub = _mm256_sub_ps(upper8, paa8);
+  f = _mm256_mul_ps(tosub, tosub);
+  mask = _mm256_cmp_ps(upper8, paa8, _CMP_LT_OQ);
+  dis8 = _mm256_add_ps(dis8, _mm256_and_ps(f, mask));
+
+  const auto* q = (const float*)&dis8;
+  distance = q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7];
+
+#else
+  __m256 dis8 = _mm256_setzero_ps();
+
+  for(int i=0;i<Segments;i+=8) {
+    __m256 paa8 = _mm256_loadu_ps(paa + i);
+
+    __m256 lower8 = _mm256_loadu_ps(breakpoint_lower + i);
+    __m256 tosub = _mm256_sub_ps(lower8, paa8);
+    __m256 f = _mm256_mul_ps(tosub, tosub);
+    __m256 mask = _mm256_cmp_ps(lower8, paa8, _CMP_GT_OQ);
+    dis8 = _mm256_add_ps(dis8, _mm256_and_ps(f, mask));
+
+    __m256 upper8 = _mm256_loadu_ps(breakpoint_upper + i);
+    tosub = _mm256_sub_ps(upper8, paa8);
+    f = _mm256_mul_ps(tosub, tosub);
+    mask = _mm256_cmp_ps(upper8, paa8, _CMP_LT_OQ);
+    dis8 = _mm256_add_ps(dis8, _mm256_and_ps(f, mask));
+
+  }
+
+  const auto* q = (const float*)&dis8;
+  distance = q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7];
+#endif
+
+//  if (abs(distance - distance1) > 1e6) {
+//    out("错了");
+//    out(distance);
+//    out(distance1);
+//    ts_print((float*)paa, 16);
+//    sax_print(sax);
+//    exit(1);
+//  }
 
     //distance = ratio_sqrt * sqrtf(distance);
     return nchuw * distance;

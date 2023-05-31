@@ -30,6 +30,7 @@ Copyright (C) 2012 University of Trento\n\n"
 
 
 
+
 void z_normalize(float *ts, int size);
 
 void inline z_normalize(float *ts, int size) {
@@ -136,7 +137,7 @@ void parse_args (int argc, char **argv, int *length, int *number_of_timeseries,
 void generate_random_timeseries(int length, int number_of_timeseries,
                                 char normalize, char * filename, bool has_saxt, char * filename1,
                                 bool is_sort, bool has_ts, bool has_timestamp, int time_stamp_repeat, bool has_query_time,
-                                int window_min_size, int window_max_size, int seed) {
+                                int window_min_size, int window_max_size, int seed, char* modes) {
     // Initialize random number generation
     const gsl_rng_type * T;
     gsl_rng * r;
@@ -146,16 +147,17 @@ void generate_random_timeseries(int length, int number_of_timeseries,
 //    gsl_rng_default_seed = ((unsigned long)(time(NULL)));
     gsl_rng_default_seed = (seed);
     r = gsl_rng_alloc (T);
+
     FILE * data_file;
     if (has_ts)
-        data_file = fopen (filename,"w");
+        data_file = fopen (filename, modes);
 
 
     FILE * saxt_file;
     saxt_only* saxts;
     size_t *p;
     if (has_saxt) {
-        saxt_file = fopen (filename1,"w");
+        saxt_file = fopen (filename1, modes);
         saxts = (saxt_only*)malloc(sizeof(saxt_only)*number_of_timeseries);
         memset(saxts, 0, sizeof(saxt_only)*number_of_timeseries);
         p = (size_t*)malloc(sizeof(size_t)*number_of_timeseries);
@@ -165,7 +167,7 @@ void generate_random_timeseries(int length, int number_of_timeseries,
     float *ts = (float*)malloc(sizeof(float) * length);
 
     int i;
-    for (i=1; i<=number_of_timeseries; i++)
+    for (i = 1; i <= number_of_timeseries; i ++ )
     {
         generate(ts, length, r, normalize);
 
@@ -175,7 +177,6 @@ void generate_random_timeseries(int length, int number_of_timeseries,
                 int cnt = i / time_stamp_repeat;
                 if (!has_query_time) {
                     long timestamp = 1000000000 + 100 * cnt;
-
 //                    std:: cout << "time = " << timestamp << std::endl;
                     fwrite(&timestamp, sizeof(long), 1, data_file);
                 }
@@ -209,8 +210,8 @@ void generate_random_timeseries(int length, int number_of_timeseries,
         if (is_sort) {
             std::sort(saxts, saxts + number_of_timeseries + 1);
         }
-        for (i=1; i<=number_of_timeseries; i++) {
-            if (i%1000==0)
+        for (i = 1; i <= number_of_timeseries; i ++ ) {
+            if (i % 1000 == 0)
                 saxt_print(saxts[i]);
             fwrite(p+i, sizeof(size_t), 1 , saxt_file);
             fwrite(saxts[i].asaxt, sizeof(saxt_type), Bit_cardinality , saxt_file);
@@ -226,20 +227,28 @@ void generate_random_timeseries(int length, int number_of_timeseries,
 }
 
 
+//追加写入
+
 int main(int argc, char **argv) {
 //    // Parse command line arguments
 //    parse_args(argc, argv, &length, &number_of_timeseries, &skew_frequency, &normalize,&filename);
+//
 
-    // Initialize variables
+
+// Initialize variables
 
     int length = Ts_length;                 // Length of a single time series
-    int number_of_timeseries =  3e6;   // Number of time series to generate    1e6=1GB
+    int number_of_timeseries =  70000;   // Number of time series to generate    1e6=1GB
+    int number_of_timeseries1 =  30000;   // Number of time series to generate    1e6=1GB
+
+// 倾斜度
     char normalize = 1;             // Normalize or not.
-    char * filename = "./ts.bin";   //  File name of TS
+    char * filename = "./query.bin";   //  File name of TS
     char * filename_saxt = "./saxt.bin";    //  File name of SAXT
 
+
     bool has_ts = 1;    //  Generate TS or not
-    bool has_saxt = 1;  //  Generate SAXT or not
+    bool has_saxt = 0;  //  Generate SAXT or not
     bool is_sort = 0;   //  The generated SAXTs are sorted or not
     bool has_timestamp = 0; //  The generated data contains a timestamp or not
     int time_stamp_repeat = 100000; //  How many TS have the same timestamp
@@ -247,7 +256,10 @@ int main(int argc, char **argv) {
     int windows_max_size = 1000;    //  Randomly generated timestamp window size
     int windows_min_size = 100; //  Randomly generated timestamp window size
 
-    int seed = 123; // seed of gsl
+    int seed = 123; // The gsl seed of the previous part of the data
+
+    int seed2 = 100;    //  The gsl seed of the latter part of the data
+
 
 
     fprintf(stderr,PRODUCT);
@@ -255,8 +267,10 @@ int main(int argc, char **argv) {
     fprintf(stderr, ">> Data Filename: %s\n", filename);
     generate_random_timeseries(length, number_of_timeseries, normalize, filename, has_saxt,
                                filename_saxt, is_sort, has_ts, has_timestamp, time_stamp_repeat,
-                               has_query_time, windows_min_size, windows_max_size,
-                               seed);
+                               has_query_time, windows_min_size, windows_max_size, seed, "w");
+    generate_random_timeseries(length, number_of_timeseries1, normalize, filename, has_saxt,
+                               filename_saxt, is_sort, has_ts, has_timestamp, time_stamp_repeat,
+                               has_query_time, windows_min_size, windows_max_size, seed2, "a");
 
     fprintf(stderr, ">> Done.\n");
     return 0;

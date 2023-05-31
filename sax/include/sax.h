@@ -15,20 +15,22 @@
 #include <cstring>
 
 
-enum response sax_from_ts(ts_type *ts_in, sax_type *sax_out);
-enum response saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out);
+void sax_from_ts(ts_type *ts_in, sax_type *sax_out);
+void saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out);
 
-enum response paa_saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out, ts_type *paa);
+void paa_saxt_from_ts(ts_type *ts_in, saxt_type *saxt_out, ts_type *paa);
 
 void sax_print(sax_type *sax, int segments, int bit_cardinality);
+void sax_print(sax_type *sax);
 void saxt_print(saxt_type *saxt);
 void saxt_print(saxt_only saxt);
+void leafkey_print(void* saxt);
 void saxt_print(saxt_type *saxt, saxt_type *prefix, cod co_d);
 void printbin(unsigned long long n, int size);
 void serial_printbin (unsigned long long n, int size);
 int compare(const void *a, const void *b);
 //saxt 只有co_d个
-float minidist_paa_to_saxt(ts_type *paa, saxt saxt_, cod co_d);
+float minidist_paa_to_saxt(const float* paa, saxt saxt_, cod co_d);
 float minidist_paa_to_isax(ts_type *paa, sax_type *sax, sax_type *sax_cardinalities,
                            sax_type max_bit_cardinality,
                            sax_type max_cardinality,
@@ -44,10 +46,10 @@ ts_type minidist_paa_to_isax_raw(ts_type *paa, sax_type *sax,
 			       ts_type ratio_sqrt) ;
 
 //分开
-enum response paa_from_ts(ts_type *ts_in, ts_type *paa_out);
-enum response sax_from_paa (ts_type *paa, sax_type *sax);
-enum response saxt_from_sax(sax_type *sax_in, saxt_type *saxt_out);
-enum response sax_from_saxt(sax_type *saxt_in, saxt_type *sax_out);
+void paa_from_ts(ts_type *ts_in, ts_type *paa_out);
+void sax_from_paa (ts_type *paa, sax_type *sax);
+void saxt_from_sax(sax_type *sax_in, saxt_type *saxt_out);
+void sax_from_saxt(saxt_type *saxt_in, sax_type *sax_out);
 
 
 
@@ -69,7 +71,7 @@ static inline cod get_co_d_from_saxt(saxt_only a, saxt_only b, cod pre_d) {
 }
 //比较在第d个段是否相等
 static inline bool compare_saxt_d(saxt_only a, saxt_only b, cod d) {
-  return a.asaxt[Bit_cardinality - 2 + d] == b.asaxt[Bit_cardinality - 2 + d];
+  return a.asaxt[Bit_cardinality - d] == b.asaxt[Bit_cardinality - d];
 }
 
 

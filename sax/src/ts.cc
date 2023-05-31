@@ -5,14 +5,17 @@
 //  Created by Kostas Zoumpatianos on 3/7/12.
 //  Copyright 2012 University of Trento. All rights reserved.
 //
+#include "../include/ts.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <xmmintrin.h>
+
 #include "../include/config.h"
 #include "../include/globals.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <math.h>
-#include "../include/ts.h"
+#include "immintrin.h"
 
 /**
  This function converts a string of floats seperated by a delimeter into a ts 
@@ -42,14 +45,29 @@ void ts_parse_str(char ts_str[], ts_type * ts_out, int ts_size, const char * del
 }
 
 float ts_euclidean_distance(ts_type * t, ts_type * s, int size) {
-    float distance = 0;
-    while (size > 0) {
-        size--;
-        distance += (t[size] - s[size]) * (t[size] - s[size]);
-    }
-    //distance = sqrtf(distance);
-    
-    return distance;
+
+  __m256 xfsSum = _mm256_setzero_ps();
+  __m256 a;	// 加载.
+  __m256 b;
+
+  for (int i=0;i<size;i+=8) {
+    a = _mm256_loadu_ps(t + i);
+    b = _mm256_loadu_ps(s + i);
+    __m256 c = _mm256_sub_ps(a, b);
+    __m256 d = _mm256_mul_ps(c, c);
+    xfsSum = _mm256_add_ps(xfsSum, d);
+  }
+  const auto* q = (const float*)&xfsSum;
+  return q[0] + q[1] + q[2] + q[3] + q[4] + q[5] + q[6] + q[7];
+
+//    float distance = 0;
+//    while (size > 0) {
+//        size--;
+//        distance += (t[size] - s[size]) * (t[size] - s[size]);
+//    }
+//    //distance = sqrtf(distance);
+//
+//    return distance;
 }
 
 ts_type ts_euclidean_distance_reordered(ts_type * q, ts_type * t , int j , int  size ,ts_type bsf, int * order)
